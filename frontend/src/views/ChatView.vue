@@ -52,7 +52,8 @@
           <el-icon><Document /></el-icon> {{ uploadedFile.original_name }}
         </el-tag>
         <el-button size="small" type="primary" plain @click="analyzeDoc('qa')">分析文书内容</el-button>
-        <el-button size="small" type="success" plain @click="analyzeDoc('extract')">提取调度参数</el-button>
+        <el-button size="small" type="success" plain @click="analyzeDoc('extract', true)">提取并创建任务</el-button>
+        <el-button size="small" type="warning" plain @click="analyzeDoc('extract', false)">仅提取参数</el-button>
       </div>
 
       <!-- 输入区 -->
@@ -406,7 +407,7 @@ async function handleUpload(file: File) {
   return false
 }
 
-async function analyzeDoc(mode: string) {
+async function analyzeDoc(mode: string, autoCreate = false) {
   if (!activeConvId.value) await newConversation()
   if (!uploadedFile.value) return
   streaming.value = true
@@ -416,10 +417,14 @@ async function analyzeDoc(mode: string) {
       file_url: uploadedFile.value.url,
       mode,
       question: mode === 'qa' ? '请总结文书的主要内容和调度要求' : '',
+      auto_create_task: mode === 'extract' && autoCreate,
     })
     messages.value.push({
       id: Date.now(), role: 'assistant', content: data.content, msg_type: 'text', created_at: '',
     })
+    if (data.task_created) {
+      ElMessage.success(`已创建调度任务 #${data.task_id}，请前往调度优化页面执行`)
+    }
     scrollBottom()
   } finally {
     streaming.value = false

@@ -2,7 +2,7 @@
   <el-tabs type="border-card">
     <!-- 泵站管理 -->
     <el-tab-pane label="泵站管理">
-      <el-button type="primary" size="small" @click="showStationForm()" style="margin-bottom:12px">
+      <el-button v-if="canWrite" type="primary" size="small" @click="showStationForm()" style="margin-bottom:12px">
         <el-icon><Plus /></el-icon> 新增泵站
       </el-button>
       <el-table :data="stations" stripe>
@@ -11,8 +11,10 @@
         <el-table-column prop="location" label="位置" />
         <el-table-column label="操作" width="200">
           <template #default="{ row }">
-            <el-button text type="primary" @click="showStationForm(row)">编辑</el-button>
-            <el-button text type="danger" @click="delStation(row.id)">删除</el-button>
+            <template v-if="canWrite">
+              <el-button text type="primary" @click="showStationForm(row)">编辑</el-button>
+              <el-button text type="danger" @click="delStation(row.id)">删除</el-button>
+            </template>
             <el-button text type="success" @click="showUnits(row)">机组</el-button>
           </template>
         </el-table-column>
@@ -28,7 +30,7 @@
           </el-select>
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" size="small" @click="showUnitForm()" :disabled="!unitStationId">
+          <el-button v-if="canWrite" type="primary" size="small" @click="showUnitForm()" :disabled="!unitStationId">
             <el-icon><Plus /></el-icon> 新增机组
           </el-button>
         </el-form-item>
@@ -40,8 +42,11 @@
         <el-table-column prop="rated_flow" label="额定流量(m³/h)" width="150" />
         <el-table-column label="操作" width="160">
           <template #default="{ row }">
-            <el-button text type="primary" @click="showUnitForm(row)">编辑</el-button>
-            <el-button text type="danger" @click="delUnit(row.id)">删除</el-button>
+            <template v-if="canWrite">
+              <el-button text type="primary" @click="showUnitForm(row)">编辑</el-button>
+              <el-button text type="danger" @click="delUnit(row.id)">删除</el-button>
+            </template>
+            <span v-else style="color:#999;font-size:12px">只读</span>
           </template>
         </el-table-column>
       </el-table>
@@ -75,12 +80,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { useUserStore } from '../stores/user'
 import {
   getStations, createStation, updateStation, deleteStation,
   getUnits, createUnit, updateUnit, deleteUnit,
 } from '../api'
+
+const userStore = useUserStore()
+const canWrite = computed(() => ['admin', 'operator'].includes(userStore.role))
 
 const stations = ref<any[]>([])
 const units = ref<any[]>([])

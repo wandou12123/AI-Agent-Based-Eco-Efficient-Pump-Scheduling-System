@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select, desc, text
@@ -7,14 +8,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db, AsyncSessionLocal
 from app.core.security import get_current_user
-from app.models.models import User, Conversation, Message
+from app.models.models import User, Conversation, Message, PumpStation, PumpUnit, ScheduleTask
 from app.schemas.chat import (
     ConversationOut, MessageOut, SendMessageRequest,
-    RenameConversationRequest, DocxAnalysisRequest,
+    RenameConversationRequest, DocxAnalysisRequest, ToolChatRequest,
 )
-from app.services.llm_client import chat_completion
-from app.services.docx_parser import extract_text_from_docx
-from app.agents.orchestrator import run_docx_agent, SYSTEM_PROMPT
+from app.services.docx_parser import parse_docx_text
+from app.agents.orchestrator import run_chat_agent, run_docx_agent
+from app.agents.tool_agent import run_tool_agent, parse_extract_params
+from app.services.audit import write_audit_log
 from app.core.config import get_settings
 
 router = APIRouter()
@@ -46,6 +48,7 @@ async def create_conversation(
     db.add(conv)
     await db.flush()
     await db.refresh(conv)
+    await write_audit_log(db, user.id, "conversation.create", {"conversation_id": conv.id})
     logger.info(f"[对话] 用户 {user.username} 创建新会话 #{conv.id}")
     return conv
 
@@ -68,6 +71,7 @@ async def rename_conversation(
     conv.title = req.title.strip()[:200]
     await db.flush()
     await db.refresh(conv)
+    await write_audit_log(db, user.id, "conversation.rename", {"conversation_id": conv_id, "title": conv.title})
     logger.info(f"[对话] 会话 #{conv_id} 重命名为「{conv.title}」")
     return conv
 
@@ -88,6 +92,9 @@ async def delete_conversation(
     if result.rowcount == 0:
         raise HTTPException(404, "会话不存在")
     await db.commit()
+    async with AsyncSessionLocal() as audit_db:
+        await write_audit_log(audit_db, user_id, "conversation.delete", {"conversation_id": conv_id})
+        await audit_db.commit()
     logger.info(f"[对话] 软删除会话 #{conv_id} (数据库中保留)")
     return {"ok": True}
 
@@ -144,32 +151,19 @@ async def send_message(
     db.add(user_msg)
     await db.flush()
 
-    # Build message history
     history_result = await db.execute(
         select(Message)
         .where(Message.conversation_id == conv.id)
         .order_by(Message.created_at)
     )
-    history = history_result.scalars().all()
+    history = [{"role": m.role, "content": m.content or ""} for m in history_result.scalars().all() if m.role in ("user", "assistant")]
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-
+    doc_context = None
     if req.msg_type == "docx" and req.file_url:
-        import os
         file_path = os.path.join(settings.UPLOAD_DIR, os.path.basename(req.file_url))
-        doc_text = extract_text_from_docx(file_path)
-        if doc_text:
-            messages.append({
-                "role": "system",
-                "content": f"用户上传了一份文书，内容如下：\n\n{doc_text[:6000]}",
-            })
-            logger.info(f"[对话] 附加文书上下文, 长度={len(doc_text)}字")
-
-    for msg in history:
-        if msg.role in ("user", "assistant"):
-            messages.append({"role": msg.role, "content": msg.content or ""})
-
-    logger.info(f"[对话] 构建 LLM 请求: 系统提示+{len(history)}条历史 -> 共{len(messages)}条消息")
+        doc_context = parse_docx_text(file_path)
+        if doc_context:
+            logger.info(f"[对话] 附加文书上下文, 长度={len(doc_context)}字")
 
     conv_id = conv.id
     await db.commit()
@@ -177,12 +171,15 @@ async def send_message(
     async def generate():
         full_reply = []
         try:
-            async for chunk in chat_completion(messages, stream=True):
+            stream = await run_chat_agent(history, req.content, doc_context=doc_context, stream=True)
+            async for chunk in stream:
                 full_reply.append(chunk)
                 yield f"data: {json.dumps({'content': chunk}, ensure_ascii=False)}\n\n"
         except Exception as e:
             logger.error(f"[对话] LLM 流式调用异常: {e}")
-            yield f"data: {json.dumps({'content': f'\\n\\n[错误] LLM 调用失败: {e}'}, ensure_ascii=False)}\n\n"
+            fallback = f"\n\n[提示] 大模型暂时不可用，请稍后重试。（LLM_001）"
+            full_reply.append(fallback)
+            yield f"data: {json.dumps({'content': fallback}, ensure_ascii=False)}\n\n"
 
         reply_text = "".join(full_reply)
         logger.info(f"[对话] AI 回复完成, 长度={len(reply_text)}字, 写入会话 #{conv_id}")
@@ -208,17 +205,30 @@ async def analyze_docx(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    import os
     file_path = os.path.join(settings.UPLOAD_DIR, os.path.basename(req.file_url))
     logger.info(f"[文书] 用户 {user.username} 请求分析文书: {req.file_url} (模式={req.mode})")
 
-    doc_text = extract_text_from_docx(file_path)
+    doc_text = parse_docx_text(file_path)
     if not doc_text:
         raise HTTPException(400, "无法提取文书内容")
 
-    logger.info(f"[文书] 提取文书内容 {len(doc_text)} 字, 调用 LLM...")
-    result = await run_docx_agent(doc_text, mode=req.mode, question=req.question)
-    logger.info(f"[文书] 分析完成, 结果 {len(result)} 字")
+    user_msg = Message(
+        conversation_id=req.conversation_id,
+        role="user",
+        content=f"[文书分析] mode={req.mode} file={req.file_url}" + (f" question={req.question}" if req.question else ""),
+        msg_type="docx",
+        file_url=req.file_url,
+    )
+    db.add(user_msg)
+    await db.flush()
+
+    try:
+        logger.info(f"[文书] 提取文书内容 {len(doc_text)} 字, 调用 LLM...")
+        result = await run_docx_agent(doc_text, mode=req.mode, question=req.question)
+        logger.info(f"[文书] 分析完成, 结果 {len(result)} 字")
+    except Exception as e:
+        logger.error(f"[文书] LLM 分析失败: {e}")
+        raise HTTPException(502, f"文书分析失败: {e}")
 
     assistant_msg = Message(
         conversation_id=req.conversation_id,
@@ -227,6 +237,124 @@ async def analyze_docx(
         msg_type="text",
     )
     db.add(assistant_msg)
+    await write_audit_log(db, user.id, "docx.analyze", {"mode": req.mode, "file_url": req.file_url})
+
+    response: dict = {"content": result, "conversation_id": req.conversation_id}
+
+    if req.mode == "extract" and req.auto_create_task:
+        params = parse_extract_params(result)
+        if params:
+            station_id = params.get("station_id", 1)
+            constraints = {
+                "station_id": station_id,
+                "min_flow": params.get("min_flow", 200),
+            }
+            if params.get("max_units_running"):
+                constraints["max_units_running"] = params["max_units_running"]
+
+            task = ScheduleTask(
+                user_id=user.id,
+                conversation_id=req.conversation_id,
+                objective_text=params.get("objective_text", "最小化能耗"),
+                constraints_json=constraints,
+                status="created",
+            )
+            db.add(task)
+            await db.flush()
+            await db.refresh(task)
+            await write_audit_log(db, user.id, "task.create.from_docx", {"task_id": task.id, "params": params})
+            response["extracted_params"] = params
+            response["task_id"] = task.id
+            response["task_created"] = True
+            result += f"\n\n---\n已自动创建调度任务 #{task.id}，请前往「调度优化」页面执行优化。"
+            assistant_msg.content = result
+
+    await db.commit()
+    response["content"] = result
+    return response
+
+
+@router.post("/chat/tool")
+async def tool_chat(
+    req: ToolChatRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """多 Agent 工具调用对话：支持查泵站、建任务、触发优化"""
+    if req.conversation_id:
+        conv_check = await db.execute(
+            select(Conversation).where(
+                Conversation.id == req.conversation_id, Conversation.user_id == user.id
+            )
+        )
+        if not conv_check.scalar_one_or_none():
+            raise HTTPException(404, "会话不存在")
+        conv_id = req.conversation_id
+    else:
+        conv = Conversation(user_id=user.id, title=req.content[:30])
+        db.add(conv)
+        await db.flush()
+        conv_id = conv.id
+
+    user_msg = Message(conversation_id=conv_id, role="user", content=req.content, msg_type="text")
+    db.add(user_msg)
+    await db.flush()
+
+    history_result = await db.execute(
+        select(Message).where(Message.conversation_id == conv_id).order_by(Message.created_at)
+    )
+    history = [{"role": m.role, "content": m.content or ""} for m in history_result.scalars().all() if m.role in ("user", "assistant")]
+
+    async def _list_stations(_args):
+        rows = (await db.execute(select(PumpStation))).scalars().all()
+        return [{"id": s.id, "name": s.name, "location": s.location} for s in rows]
+
+    async def _get_units(args):
+        sid = args.get("station_id", 1)
+        rows = (await db.execute(select(PumpUnit).where(PumpUnit.station_id == sid))).scalars().all()
+        return [{"id": u.id, "name": u.unit_name, "power": float(u.rated_power_kw or 0), "flow": float(u.rated_flow or 0)} for u in rows]
+
+    async def _create_task(args):
+        constraints = {"station_id": args.get("station_id", 1), "min_flow": args.get("min_flow", 200)}
+        task = ScheduleTask(
+            user_id=user.id,
+            conversation_id=conv_id,
+            objective_text=args.get("objective_text", "最小化能耗"),
+            constraints_json=constraints,
+            status="created",
+        )
+        db.add(task)
+        await db.flush()
+        await db.refresh(task)
+        return {"task_id": task.id, "status": task.status}
+
+    async def _run_optimize(args):
+        from app.core.sync_database import SyncSessionLocal
+        from app.services.schedule_pipeline import execute_optimize_pipeline
+        tid = args.get("task_id")
+        sync_db = SyncSessionLocal()
+        try:
+            result = execute_optimize_pipeline(sync_db, tid, user.id)
+            return {"task_id": tid, "status": result["status"], "feasible": result["plan"].get("feasible")}
+        finally:
+            sync_db.close()
+
+    tool_handlers = {
+        "list_stations": _list_stations,
+        "get_station_units": _get_units,
+        "create_schedule_task": _create_task,
+        "run_optimize": _run_optimize,
+    }
+
+    try:
+        reply = await run_tool_agent(req.content, history, tool_handlers)
+    except Exception as e:
+        logger.error(f"[ToolChat] 失败: {e}")
+        raise HTTPException(502, f"工具 Agent 调用失败: {e}")
+
+    assistant_msg = Message(conversation_id=conv_id, role="assistant", content=reply, msg_type="text")
+    db.add(assistant_msg)
+    await write_audit_log(db, user.id, "chat.tool", {"conversation_id": conv_id})
     await db.commit()
 
-    return {"content": result, "conversation_id": req.conversation_id}
+    return {"content": reply, "conversation_id": conv_id}

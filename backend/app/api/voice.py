@@ -71,7 +71,11 @@ async def _call_whisper_api(file_path: str, filename: str) -> str:
     api_base = settings.LLM_API_BASE_URL.rstrip("/")
     api_key = settings.LLM_API_KEY
 
-    whisper_url = f"{api_base}/v1/audio/transcriptions"
+    # base_url 已含 /v1 时不再重复拼接
+    if api_base.endswith("/v1"):
+        whisper_url = f"{api_base}/audio/transcriptions"
+    else:
+        whisper_url = f"{api_base}/v1/audio/transcriptions"
 
     logger.info(f"[语音] 调用 Whisper API: {whisper_url}")
 

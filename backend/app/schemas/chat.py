@@ -42,3 +42,9 @@ class DocxAnalysisRequest(BaseModel):
     file_url: str
     mode: str = "qa"       # "qa" or "extract"
     question: str = ""
+    auto_create_task: bool = False  # extract 模式下自动创建调度任务
+
+
+class ToolChatRequest(BaseModel):
+    conversation_id: Optional[int] = None
+    content: str

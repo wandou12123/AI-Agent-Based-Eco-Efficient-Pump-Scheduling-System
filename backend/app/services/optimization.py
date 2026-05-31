@@ -1,6 +1,5 @@
-"""能效优化引擎：基于约束的机组组合与负荷分配（贪心策略）"""
-from typing import List, Dict, Optional
-from decimal import Decimal
+"""能效优化引擎：基于约束的机组组合与负荷分配（贪心策略，详设 §6.1）"""
+from typing import Dict, List, Optional
 
 
 def optimize_schedule(
@@ -9,15 +8,22 @@ def optimize_schedule(
     max_units: Optional[int] = None,
 ) -> Dict:
     """
-    贪心优化：按效率从高到低选择机组，在满足流量约束下最小化能耗。
-    units: [{"id":1, "name":"1号机组", "rated_power_kw":150, "rated_flow":100, "meta_json":{...}}]
-    target_flow: 目标总流量 (m³/h)
-    max_units: 最多运行台数（可选）
+    基于机组额定参数生成启停与流量分配方案；按单位流量功耗优先选择机组。
+
+    步骤：计算 rated_power_kw/rated_flow 升序排序 → 贪心分配流量 → 未选中机组标记停止。
+
+    Args:
+        units: 机组列表，含 id/unit_name/rated_power_kw/rated_flow
+        target_flow: 目标总流量 (m³/h)
+        max_units: 最多运行台数（可选）
+
+    Returns:
+        plan 列表、total_energy_kwh、total_flow、feasible 可行性标记
+        时间复杂度 O(n log n)
     """
     if not units:
         return {"plan": [], "total_energy_kwh": 0, "total_flow": 0, "feasible": False}
 
-    # 按单位流量功耗排序（功耗低 = 效率高）
     rated_units = []
     for u in units:
         pwr = float(u.get("rated_power_kw") or 0)
@@ -49,7 +55,6 @@ def optimize_schedule(
         })
         remaining_flow -= alloc_flow
 
-    # 未选中的机组设为停止
     selected_ids = {s["unit_id"] for s in selected}
     for u in units:
         if u["id"] not in selected_ids:
@@ -74,7 +79,16 @@ def optimize_schedule(
 
 
 def validate_safety(plan: Dict, thresholds: Dict) -> Dict:
-    """基于规则的安全校验"""
+    """
+    执行功率上限、台数上限、最低流量等阈值校验。
+
+    Args:
+        plan: optimize_schedule 输出
+        thresholds: 约束阈值（max_power_kw/min_flow/max_units_running 等）
+
+    Returns:
+        {passed: bool, checks: [{item, passed, detail}, ...]}，复杂度 O(k)
+    """
     checks = []
     passed = True
 
@@ -84,7 +98,7 @@ def validate_safety(plan: Dict, thresholds: Dict) -> Dict:
 
     running = [p for p in plan.get("plan", []) if p.get("action") == "启动"]
 
-    if max_units and len(running) > max_units:
+    if max_units is not None and len(running) > max_units:
         checks.append({"item": "运行台数", "passed": False, "detail": f"运行{len(running)}台，超过上限{max_units}台"})
         passed = False
     else:

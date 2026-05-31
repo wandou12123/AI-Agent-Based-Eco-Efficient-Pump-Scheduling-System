@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     # LLM
     LLM_API_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     LLM_API_KEY: str = "sk-placeholder"
-    LLM_MODEL_NAME: str = "qwen3"
+    LLM_MODEL_NAME: str = "qwen-turbo"
 
     # MySQL
     MYSQL_HOST: str = "127.0.0.1"
@@ -23,6 +23,11 @@ class Settings(BaseSettings):
 
     # Upload
     UPLOAD_DIR: str = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "uploads")
+
+    # Redis / Celery（Backlog B-06）
+    REDIS_URL: str = "redis://127.0.0.1:6379/0"
+    CELERY_BROKER_URL: str = "redis://127.0.0.1:6379/1"
+    USE_CELERY: bool = False
 
     @property
     def DATABASE_URL(self) -> str:

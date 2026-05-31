@@ -11,13 +11,15 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from contextlib import asynccontextmanager
 import traceback
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import get_settings
 from app.core.database import engine, Base
+from app.core.response import error_response, http_status_to_error_code, ErrorCode, success_response
+from app.core.middleware import unified_response_middleware
 from app.api import auth, chat, stations, tasks, upload, voice
 
 settings = get_settings()
@@ -64,6 +66,11 @@ app.add_middleware(
 
 
 @app.middleware("http")
+async def wrap_unified_response(request: Request, call_next):
+    return await unified_response_middleware(request, call_next)
+
+
+@app.middleware("http")
 async def log_requests(request: Request, call_next):
     start = time.time()
     response = await call_next(request)
@@ -99,16 +106,27 @@ app.include_router(upload.router, prefix="/api/v1/upload", tags=["文件上传"]
 app.include_router(voice.router, prefix="/api/v1/voice", tags=["语音"])
 
 
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+    code, message = http_status_to_error_code(exc.status_code, detail)
+    body = error_response(code, message)
+    body["detail"] = detail  # 兼容旧前端
+    return JSONResponse(status_code=exc.status_code, content=body)
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     tb = traceback.format_exc()
     logger.error(f"[异常] {request.method} {request.url.path}\n{tb}")
-    return JSONResponse(status_code=500, content={"detail": str(exc)})
+    body = error_response(ErrorCode.SRV_001, "服务器内部错误")
+    body["detail"] = str(exc)
+    return JSONResponse(status_code=500, content=body)
 
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok"}
+    return success_response({"status": "ok", "celery": settings.USE_CELERY})
 
 
 if __name__ == "__main__":

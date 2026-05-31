@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     id INT AUTO_INCREMENT PRIMARY KEY,
     user_id INT NOT NULL,
     title VARCHAR(200) DEFAULT '新对话',
+    is_deleted TINYINT(1) DEFAULT 0 COMMENT '软删除标记',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -103,3 +104,23 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 -- 插入默认管理员账号 (密码: admin123，bcrypt hash，须为 60 字符)
 INSERT IGNORE INTO users (username, password_hash, role) VALUES
 ('admin', '$2b$12$oSup02NPjzn2LRCp/BiAF.lnKDK9ae7RO5l/5RTd.mCQsdJcdMk7y', 'admin');
+
+-- 演示泵站与机组（详设 §1.1 工况展示依赖种子数据）
+INSERT IGNORE INTO pump_stations (id, name, location, meta_json) VALUES
+(1, '东湖泵站', '浙江省杭州市', '{"design_flow": 500, "design_head": 12}');
+
+INSERT IGNORE INTO pump_units (id, station_id, unit_name, rated_power_kw, rated_flow, meta_json) VALUES
+(1, 1, '1号机组', 150.00, 100.00, '{"efficiency_curve": "standard"}'),
+(2, 1, '2号机组', 180.00, 120.00, '{"efficiency_curve": "standard"}'),
+(3, 1, '3号机组', 200.00, 150.00, '{"efficiency_curve": "standard"}'),
+(4, 1, '4号机组', 220.00, 160.00, '{"efficiency_curve": "standard"}');
+
+-- 演示工况数据（最近 24 小时采样）
+INSERT IGNORE INTO operating_points (id, station_id, flow, head, power, voltage, current_amp, energy_wh, ts) VALUES
+(1, 1, 280.00, 11.50, 320.00, 380.00, 520.00, 320000.00, DATE_SUB(NOW(), INTERVAL 6 HOUR)),
+(2, 1, 295.00, 11.80, 335.00, 381.00, 540.00, 335000.00, DATE_SUB(NOW(), INTERVAL 5 HOUR)),
+(3, 1, 310.00, 12.00, 350.00, 382.00, 560.00, 350000.00, DATE_SUB(NOW(), INTERVAL 4 HOUR)),
+(4, 1, 305.00, 11.90, 345.00, 380.00, 550.00, 345000.00, DATE_SUB(NOW(), INTERVAL 3 HOUR)),
+(5, 1, 290.00, 11.70, 330.00, 379.00, 530.00, 330000.00, DATE_SUB(NOW(), INTERVAL 2 HOUR)),
+(6, 1, 300.00, 11.85, 340.00, 380.00, 545.00, 340000.00, DATE_SUB(NOW(), INTERVAL 1 HOUR)),
+(7, 1, 315.00, 12.10, 355.00, 382.00, 565.00, 355000.00, NOW());

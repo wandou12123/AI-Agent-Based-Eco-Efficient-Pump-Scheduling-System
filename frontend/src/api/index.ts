@@ -17,6 +17,8 @@ export const getMessages = (convId: number) => api.get(`/conversations/${convId}
 
 // Chat (SSE handled separately)
 export const analyzeDocx = (data: any) => api.post('/chat/docx-analyze', data)
+export const toolChat = (data: { conversation_id?: number; content: string }) =>
+  api.post('/chat/tool', data)
 
 // Stations
 export const getStations = () => api.get('/stations')
@@ -36,7 +38,10 @@ export const getTasks = () => api.get('/tasks')
 export const createTask = (data: any) => api.post('/tasks', data)
 export const getTask = (id: number) => api.get(`/tasks/${id}`)
 export const getTaskPlans = (id: number) => api.get(`/tasks/${id}/plans`)
-export const runOptimize = (id: number) => api.post(`/tasks/${id}/optimize`)
+export const runOptimize = (id: number, asyncMode = false) =>
+  api.post(`/tasks/${id}/optimize`, null, { params: { async_mode: asyncMode } })
+export const getOptimizeStatus = (taskId: number, jobId: string) =>
+  api.get(`/tasks/${taskId}/optimize/status`, { params: { job_id: jobId } })
 
 // Upload
 export const uploadFile = (file: File) => {
