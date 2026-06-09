@@ -7,7 +7,7 @@ from sqlalchemy import select, desc, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db, AsyncSessionLocal
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_operator
 from app.models.models import User, Conversation, Message, PumpStation, PumpUnit, ScheduleTask
 from app.schemas.chat import (
     ConversationOut, MessageOut, SendMessageRequest,
@@ -41,7 +41,7 @@ async def list_conversations(
 
 @router.post("/conversations", response_model=ConversationOut)
 async def create_conversation(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ):
     conv = Conversation(user_id=user.id, title="新对话")
@@ -57,7 +57,7 @@ async def create_conversation(
 async def rename_conversation(
     conv_id: int,
     req: RenameConversationRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -79,7 +79,7 @@ async def rename_conversation(
 @router.delete("/conversations/{conv_id}")
 async def delete_conversation(
     conv_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ):
     user_id = user.id
@@ -121,7 +121,7 @@ async def list_messages(
 @router.post("/chat/send")
 async def send_message(
     req: SendMessageRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ):
     logger.info(f"[对话] 用户 {user.username} 发送消息: {req.content[:60]}...")
@@ -202,7 +202,7 @@ async def send_message(
 @router.post("/chat/docx-analyze")
 async def analyze_docx(
     req: DocxAnalysisRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ):
     file_path = os.path.join(settings.UPLOAD_DIR, os.path.basename(req.file_url))
@@ -277,7 +277,7 @@ async def analyze_docx(
 @router.post("/chat/tool")
 async def tool_chat(
     req: ToolChatRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ):
     """多 Agent 工具调用对话：支持查泵站、建任务、触发优化"""

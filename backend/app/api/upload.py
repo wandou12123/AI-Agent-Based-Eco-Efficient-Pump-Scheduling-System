@@ -3,7 +3,7 @@ import uuid
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 
 from app.core.config import get_settings
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_operator
 from app.models.models import User
 
 router = APIRouter()
@@ -15,7 +15,7 @@ ALLOWED_EXTENSIONS = {".docx", ".doc", ".pdf", ".txt", ".csv", ".json"}
 @router.post("")
 async def upload_file(
     file: UploadFile = File(...),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_operator),
 ):
     ext = os.path.splitext(file.filename or "")[1].lower()
     if ext not in ALLOWED_EXTENSIONS:

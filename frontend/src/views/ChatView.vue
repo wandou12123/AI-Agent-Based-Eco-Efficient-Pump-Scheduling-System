@@ -2,7 +2,7 @@
   <div class="chat-container">
     <!-- 左侧会话列表 -->
     <div class="conv-panel">
-      <el-button type="primary" @click="newConversation" style="width:100%;margin-bottom:12px">
+      <el-button type="primary" @click="newConversation" style="width:100%;margin-bottom:12px" :disabled="!canWrite">
         <el-icon><Plus /></el-icon> 新对话
       </el-button>
       <div class="conv-list">
@@ -46,8 +46,10 @@
         </div>
       </div>
 
+      <el-alert v-if="!canWrite" type="info" :closable="false" title="只读账号：可浏览历史对话，不可发送消息或上传文书。" style="margin:8px 16px" />
+
       <!-- 文件上传提示 -->
-      <div v-if="uploadedFile" class="file-bar">
+      <div v-if="uploadedFile && canWrite" class="file-bar">
         <el-tag closable @close="uploadedFile = null">
           <el-icon><Document /></el-icon> {{ uploadedFile.original_name }}
         </el-tag>
@@ -58,20 +60,21 @@
 
       <!-- 输入区 -->
       <div class="input-bar">
-        <el-upload :show-file-list="false" :before-upload="handleUpload" accept=".docx,.doc">
+        <el-upload v-if="canWrite" :show-file-list="false" :before-upload="handleUpload" accept=".docx,.doc">
           <el-button circle><el-icon><FolderOpened /></el-icon></el-button>
         </el-upload>
-        <el-button circle :type="voiceState === 'recording' ? 'danger' : voiceState === 'transcribing' ? 'warning' : 'default'"
+        <el-button v-if="canWrite" circle :type="voiceState === 'recording' ? 'danger' : voiceState === 'transcribing' ? 'warning' : 'default'"
                    :loading="voiceState === 'transcribing'"
                    :class="{ 'voice-recording': voiceState === 'recording' }"
                    @click="toggleVoice"
                    :title="voiceState === 'recording' ? '点击停止录音' : '点击开始语音输入'">
           <el-icon><Microphone /></el-icon>
         </el-button>
+        <el-button v-if="canWrite" size="small" type="success" plain @click="sendToolMessage" :loading="streaming">工具 Agent</el-button>
         <span v-if="voiceState === 'recording'" class="voice-hint">正在聆听...</span>
         <el-input v-model="inputText" placeholder="输入消息..." @keyup.enter="sendMessage"
-                  :disabled="streaming" style="flex:1" />
-        <el-button type="primary" :loading="streaming" @click="sendMessage">
+                  :disabled="streaming || !canWrite" style="flex:1" />
+        <el-button type="primary" :loading="streaming" @click="sendMessage" :disabled="!canWrite">
           <el-icon><Promotion /></el-icon>
         </el-button>
       </div>
@@ -80,13 +83,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick, watch, computed } from 'vue'
 import { marked } from 'marked'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   getConversations, createConversation, deleteConversation,
-  renameConversation, getMessages, uploadFile, analyzeDocx, transcribeVoice,
+  renameConversation, getMessages, uploadFile, analyzeDocx, transcribeVoice, toolChat,
 } from '../api'
+import { useUserStore } from '../stores/user'
+
+const userStore = useUserStore()
+const canWrite = computed(() => ['admin', 'operator'].includes(userStore.role))
 
 interface Conv { id: number; title: string; created_at: string; updated_at: string }
 interface Msg { id: number; role: string; content: string; msg_type: string; file_url?: string; created_at: string }
@@ -321,7 +328,7 @@ async function delConversation(id: number) {
 
 async function sendMessage() {
   const text = inputText.value.trim()
-  if (!text || streaming.value) return
+  if (!text || streaming.value || !canWrite.value) return
 
   messages.value.push({ id: Date.now(), role: 'user', content: text, msg_type: 'text', created_at: '' })
   inputText.value = ''
@@ -395,6 +402,28 @@ async function sendMessage() {
     streamContent.value = ''
     uploadedFile.value = null
     await loadConversations()
+  }
+}
+
+async function sendToolMessage() {
+  const text = inputText.value.trim()
+  if (!text || streaming.value || !canWrite.value) return
+  messages.value.push({ id: Date.now(), role: 'user', content: `[工具] ${text}`, msg_type: 'text', created_at: '' })
+  inputText.value = ''
+  streaming.value = true
+  scrollBottom()
+  try {
+    const { data } = await toolChat({ conversation_id: activeConvId.value || undefined, content: text })
+    if (!activeConvId.value && data.conversation_id) activeConvId.value = data.conversation_id
+    messages.value.push({
+      id: Date.now() + 1, role: 'assistant', content: data.content, msg_type: 'text', created_at: '',
+    })
+    scrollBottom()
+    await loadConversations()
+  } catch (e: any) {
+    ElMessage.error('工具 Agent 失败: ' + (e.message || ''))
+  } finally {
+    streaming.value = false
   }
 }
 

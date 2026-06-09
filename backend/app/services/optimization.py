@@ -93,16 +93,30 @@ def validate_safety(plan: Dict, thresholds: Dict) -> Dict:
     passed = True
 
     max_power = thresholds.get("max_power_kw")
+    max_total_power = thresholds.get("max_total_power_kw")
     min_flow = thresholds.get("min_flow")
     max_units = thresholds.get("max_units_running")
+    min_units = thresholds.get("min_units_running")
 
     running = [p for p in plan.get("plan", []) if p.get("action") == "启动"]
+    total_power = sum(p.get("target_power_kw", 0) for p in running)
 
     if max_units is not None and len(running) > max_units:
         checks.append({"item": "运行台数", "passed": False, "detail": f"运行{len(running)}台，超过上限{max_units}台"})
         passed = False
+    elif min_units is not None and len(running) < min_units:
+        checks.append({"item": "最少运行台数", "passed": False, "detail": f"运行{len(running)}台，低于最少{min_units}台"})
+        passed = False
     else:
         checks.append({"item": "运行台数", "passed": True, "detail": f"运行{len(running)}台，在允许范围内"})
+
+    if max_total_power is not None and total_power > max_total_power:
+        checks.append({"item": "总功率", "passed": False,
+                       "detail": f"总功率{round(total_power, 2)}kW超过上限{max_total_power}kW"})
+        passed = False
+    else:
+        checks.append({"item": "总功率", "passed": True,
+                       "detail": f"总功率{round(total_power, 2)}kW在允许范围内"})
 
     for p in running:
         if max_power and p["target_power_kw"] > max_power:

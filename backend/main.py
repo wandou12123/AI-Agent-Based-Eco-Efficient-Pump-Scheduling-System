@@ -66,6 +66,16 @@ app.add_middleware(
 
 
 @app.middleware("http")
+async def inject_request_id(request: Request, call_next):
+    import uuid
+    request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:12]
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+
+@app.middleware("http")
 async def wrap_unified_response(request: Request, call_next):
     return await unified_response_middleware(request, call_next)
 
@@ -91,7 +101,7 @@ async def log_requests(request: Request, call_next):
     else:
         level = "INFO "
 
-    logger.info(f"[{level}] {method:6s} {path} -> {status} ({duration_ms:.0f}ms)")
+    logger.info(f"[{level}] {method:6s} {path} -> {status} ({duration_ms:.0f}ms) rid={getattr(request.state, 'request_id', '-')}")
     return response
 
 

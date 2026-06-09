@@ -2,7 +2,8 @@
   <div>
     <el-card shadow="never" style="margin-bottom:16px">
       <template #header><span style="font-weight:600">创建调度任务</span></template>
-      <el-form :model="form" inline>
+      <el-alert v-if="!canWrite" type="info" :closable="false" title="当前为只读账号（viewer），可查看任务与方案，不可创建或执行优化。" style="margin-bottom:12px" />
+      <el-form :model="form" inline :disabled="!canWrite">
         <el-form-item label="泵站">
           <el-select v-model="form.station_id" placeholder="选择泵站" style="width:180px">
             <el-option v-for="s in stations" :key="s.id" :label="s.name" :value="s.id" />
@@ -93,6 +94,11 @@
           <div class="explanation">{{ currentSafetySummary }}</div>
         </div>
         <el-divider />
+        <h4>功率与流量分布</h4>
+        <div v-if="planChartOption" style="height:260px;margin-bottom:12px">
+          <v-chart :option="planChartOption" autoresize style="width:100%;height:100%" />
+        </div>
+        <el-divider />
         <h4>AI 解释</h4>
         <div class="explanation" v-html="renderMd(currentPlan.explanation || '暂无')"></div>
       </div>
@@ -104,8 +110,19 @@
 import { ref, onMounted, reactive, computed } from 'vue'
 import { marked } from 'marked'
 import { ElMessage } from 'element-plus'
+import { use } from 'echarts/core'
+import { CanvasRenderer } from 'echarts/renderers'
+import { BarChart } from 'echarts/charts'
+import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
+import VChart from 'vue-echarts'
 import { getStations, getTasks, createTask, runOptimize, getTaskPlans, getOptimizeStatus } from '../api'
+import { useUserStore } from '../stores/user'
 import axios from 'axios'
+
+use([CanvasRenderer, BarChart, GridComponent, TooltipComponent, LegendComponent])
+
+const userStore = useUserStore()
+const canWrite = computed(() => ['admin', 'operator'].includes(userStore.role))
 
 const stations = ref<any[]>([])
 const tasks = ref<any[]>([])
@@ -118,6 +135,22 @@ const form = reactive({ station_id: null as number | null, min_flow: 200, object
 
 const currentSafety = computed(() => currentPlan.value?.plan_json?.safety || null)
 const currentSafetySummary = computed(() => currentPlan.value?.plan_json?.safety_summary || '')
+
+const planChartOption = computed(() => {
+  const rows = currentPlan.value?.plan_json?.plan || []
+  if (!rows.length) return null
+  const names = rows.map((r: any) => r.unit_name)
+  return {
+    tooltip: { trigger: 'axis' },
+    legend: { data: ['功率(kW)', '流量(m³/h)'] },
+    xAxis: { type: 'category', data: names },
+    yAxis: { type: 'value' },
+    series: [
+      { name: '功率(kW)', type: 'bar', data: rows.map((r: any) => r.target_power_kw || 0) },
+      { name: '流量(m³/h)', type: 'bar', data: rows.map((r: any) => r.target_flow || 0) },
+    ],
+  }
+})
 
 const STATUS_LABELS: Record<string, string> = {
   created: '已创建', parsing: '解析中', optimizing: '优化中',

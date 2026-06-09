@@ -40,6 +40,18 @@ def test_validate_safety_fail_units():
     assert safety["passed"] is False
 
 
+def test_validate_safety_max_total_power():
+    plan = {
+        "plan": [
+            {"action": "启动", "unit_name": "A", "target_power_kw": 200},
+            {"action": "启动", "unit_name": "B", "target_power_kw": 250},
+        ],
+        "total_flow": 300,
+    }
+    safety = validate_safety(plan, {"max_total_power_kw": 400})
+    assert safety["passed"] is False
+
+
 def test_parse_extract_params():
     from app.agents.tool_agent import parse_extract_params
 

@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_operator
 from app.models.models import User, ScheduleTask, SchedulePlan, PumpUnit
 from app.schemas.task import TaskCreate, TaskOut, PlanOut
 from app.services.audit import write_audit_log
@@ -31,7 +31,7 @@ async def list_tasks(
 @router.post("", response_model=TaskOut)
 async def create_task(
     req: TaskCreate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ):
     constraints = dict(req.constraints_json or {})
@@ -78,7 +78,7 @@ async def get_task_plans(task_id: int, user: User = Depends(get_current_user), d
 async def run_optimize(
     task_id: int,
     async_mode: bool = Query(False, description="true 时使用 Celery 异步队列"),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -126,7 +126,7 @@ async def run_optimize(
 async def get_optimize_status(
     task_id: int,
     job_id: str = Query(..., description="Celery job_id"),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ):
     """轮询 Celery 优化任务状态"""
