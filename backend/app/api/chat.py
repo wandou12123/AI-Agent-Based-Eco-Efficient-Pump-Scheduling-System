@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select, desc, text
@@ -17,6 +18,7 @@ from app.services.docx_parser import parse_docx_text
 from app.agents.orchestrator import run_chat_agent, run_docx_agent
 from app.agents.tool_agent import run_tool_agent, parse_extract_params
 from app.services.audit import write_audit_log
+from app.services.tool_helpers import try_rule_based_reply
 from app.core.config import get_settings
 
 router = APIRouter()
@@ -335,19 +337,73 @@ async def tool_chat(
         sync_db = SyncSessionLocal()
         try:
             result = execute_optimize_pipeline(sync_db, tid, user.id)
-            return {"task_id": tid, "status": result["status"], "feasible": result["plan"].get("feasible")}
+            return {
+                "task_id": tid,
+                "status": result["status"],
+                "feasible": result["plan"].get("feasible"),
+                "total_energy_kwh": result["plan"].get("total_energy_kwh"),
+            }
         finally:
             sync_db.close()
+
+    async def _create_and_optimize(args):
+        from app.core.sync_database import SyncSessionLocal
+        from app.services.schedule_pipeline import execute_optimize_pipeline
+
+        station_id = int(args.get("station_id", 1))
+        min_flow = float(args.get("min_flow", 200))
+        objective = args.get("objective_text", "最小化能耗")
+        constraints = {"station_id": station_id, "min_flow": min_flow}
+        task = ScheduleTask(
+            user_id=user.id,
+            conversation_id=conv_id,
+            objective_text=objective,
+            constraints_json=constraints,
+            status="created",
+        )
+        db.add(task)
+        await db.flush()
+        await db.refresh(task)
+        await write_audit_log(
+            db, user.id, "task.create.from_tool",
+            {"task_id": task.id, "constraints": constraints},
+        )
+        await db.commit()
+
+        sync_db = SyncSessionLocal()
+        try:
+            result = execute_optimize_pipeline(sync_db, task.id, user.id)
+        except ValueError as e:
+            return {"task_id": task.id, "status": "failed", "error": str(e)}
+        finally:
+            sync_db.close()
+
+        return {
+            "task_id": task.id,
+            "status": result["status"],
+            "feasible": result["plan"].get("feasible"),
+            "total_energy_kwh": result["plan"].get("total_energy_kwh"),
+            "explanation": result.get("explanation", ""),
+        }
 
     tool_handlers = {
         "list_stations": _list_stations,
         "get_station_units": _get_units,
         "create_schedule_task": _create_task,
         "run_optimize": _run_optimize,
+        "create_and_optimize_schedule": _create_and_optimize,
     }
 
+    task_id_hint: int | None = None
     try:
-        reply = await run_tool_agent(req.content, history, tool_handlers)
+        fast = await try_rule_based_reply(req.content, tool_handlers)
+        if fast:
+            reply, task_id_hint = fast
+        else:
+            reply = await run_tool_agent(req.content, history, tool_handlers)
+            tid_m = re.search(r"任务\s*#(\d+)", reply)
+            if tid_m:
+                task_id_hint = int(tid_m.group(1))
     except Exception as e:
         logger.error(f"[ToolChat] 失败: {e}")
         raise HTTPException(502, f"工具 Agent 调用失败: {e}")
@@ -357,4 +413,7 @@ async def tool_chat(
     await write_audit_log(db, user.id, "chat.tool", {"conversation_id": conv_id})
     await db.commit()
 
-    return {"content": reply, "conversation_id": conv_id}
+    resp = {"content": reply, "conversation_id": conv_id}
+    if task_id_hint:
+        resp["task_id"] = task_id_hint
+    return resp

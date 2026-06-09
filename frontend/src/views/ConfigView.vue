@@ -103,7 +103,14 @@ const unitDialogVisible = ref(false)
 const editingUnit = ref<any>(null)
 const unitForm = reactive({ unit_name: '', rated_power_kw: 0, rated_flow: 0 })
 
-async function loadStations() { const { data } = await getStations(); stations.value = data }
+async function loadStations() {
+  const { data } = await getStations()
+  stations.value = data
+  if (data.length > 0 && !unitStationId.value) {
+    unitStationId.value = data[0].id
+    await loadUnits()
+  }
+}
 async function loadUnits() {
   if (!unitStationId.value) return
   const { data } = await getUnits(unitStationId.value); units.value = data

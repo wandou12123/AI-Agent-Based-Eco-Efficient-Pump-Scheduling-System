@@ -32,6 +32,17 @@
           <el-icon :size="48" color="#c0c4cc"><ChatRound /></el-icon>
           <p>开始与智水调度助手对话</p>
           <p class="sub">支持文本对话和 .docx 文书上传分析</p>
+          <div v-if="canWrite" class="quick-chips">
+            <span class="chip-label">工具 Agent 快捷示例：</span>
+            <el-tag
+              v-for="chip in toolQuickChips"
+              :key="chip"
+              class="quick-chip"
+              effect="plain"
+              type="success"
+              @click="runToolChip(chip)"
+            >{{ chip }}</el-tag>
+          </div>
         </div>
         <div v-for="msg in messages" :key="msg.id" :class="['msg-row', msg.role]">
           <div class="avatar">
@@ -43,6 +54,10 @@
         <div v-if="streaming" class="msg-row assistant">
           <div class="avatar"><el-icon :size="20"><Cloudy /></el-icon></div>
           <div class="bubble" v-html="renderMd(streamContent)"></div>
+        </div>
+        <div v-if="toolLoading" class="msg-row assistant">
+          <div class="avatar"><el-icon :size="20"><Cloudy /></el-icon></div>
+          <div class="bubble loading-bubble">正在调用工具 Agent…</div>
         </div>
       </div>
 
@@ -70,7 +85,9 @@
                    :title="voiceState === 'recording' ? '点击停止录音' : '点击开始语音输入'">
           <el-icon><Microphone /></el-icon>
         </el-button>
-        <el-button v-if="canWrite" size="small" type="success" plain @click="sendToolMessage" :loading="streaming">工具 Agent</el-button>
+        <el-button v-if="canWrite" size="small" type="success" plain
+                   @click="sendToolMessage" :loading="toolLoading"
+                   title="需先输入自然语言指令，或点击上方快捷示例">工具 Agent</el-button>
         <span v-if="voiceState === 'recording'" class="voice-hint">正在聆听...</span>
         <el-input v-model="inputText" placeholder="输入消息..." @keyup.enter="sendMessage"
                   :disabled="streaming || !canWrite" style="flex:1" />
@@ -84,6 +101,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, nextTick, watch, computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { marked } from 'marked'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -93,7 +111,14 @@ import {
 import { useUserStore } from '../stores/user'
 
 const userStore = useUserStore()
+const router = useRouter()
 const canWrite = computed(() => ['admin', 'operator'].includes(userStore.role))
+
+const toolQuickChips = [
+  '列出所有泵站',
+  '为东湖泵站创建流量 200 的优化任务并执行',
+  '查看 1 号泵站机组参数',
+]
 
 interface Conv { id: number; title: string; created_at: string; updated_at: string }
 interface Msg { id: number; role: string; content: string; msg_type: string; file_url?: string; created_at: string }
@@ -103,6 +128,7 @@ const messages = ref<Msg[]>([])
 const activeConvId = ref<number | null>(null)
 const inputText = ref('')
 const streaming = ref(false)
+const toolLoading = ref(false)
 const streamContent = ref('')
 const messagesRef = ref<HTMLElement>()
 const uploadedFile = ref<any>(null)
@@ -405,12 +431,20 @@ async function sendMessage() {
   }
 }
 
-async function sendToolMessage() {
-  const text = inputText.value.trim()
-  if (!text || streaming.value || !canWrite.value) return
+async function sendToolMessage(presetText?: string) {
+  const text = (presetText ?? inputText.value).trim()
+  if (!text || toolLoading.value || streaming.value || !canWrite.value) {
+    if (!text && canWrite.value) {
+      ElMessage.warning('请先输入指令，或点击下方快捷示例')
+    }
+    return
+  }
+  if (!activeConvId.value) {
+    await newConversation()
+  }
   messages.value.push({ id: Date.now(), role: 'user', content: `[工具] ${text}`, msg_type: 'text', created_at: '' })
   inputText.value = ''
-  streaming.value = true
+  toolLoading.value = true
   scrollBottom()
   try {
     const { data } = await toolChat({ conversation_id: activeConvId.value || undefined, content: text })
@@ -420,11 +454,23 @@ async function sendToolMessage() {
     })
     scrollBottom()
     await loadConversations()
+    if (data.task_id) {
+      ElMessage.success({
+        message: `调度任务 #${data.task_id} 已创建并完成优化`,
+        duration: 5000,
+      })
+      setTimeout(() => router.push('/schedule'), 800)
+    }
   } catch (e: any) {
     ElMessage.error('工具 Agent 失败: ' + (e.message || ''))
   } finally {
-    streaming.value = false
+    toolLoading.value = false
   }
+}
+
+function runToolChip(text: string) {
+  inputText.value = text
+  sendToolMessage(text)
 }
 
 async function handleUpload(file: File) {
@@ -490,6 +536,10 @@ onMounted(() => { loadConversations() })
 .messages { flex: 1; overflow-y: auto; padding: 20px; }
 .empty-hint { text-align: center; margin-top: 120px; color: #999; }
 .empty-hint .sub { font-size: 13px; color: #bbb; margin-top: 4px; }
+.quick-chips { margin-top: 20px; display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; align-items: center; max-width: 520px; margin-left: auto; margin-right: auto; }
+.chip-label { font-size: 12px; color: #999; width: 100%; margin-bottom: 4px; }
+.quick-chip { cursor: pointer; }
+.loading-bubble { color: #909399; font-style: italic; }
 .msg-row { display: flex; gap: 12px; margin-bottom: 20px; }
 .msg-row.user { flex-direction: row-reverse; }
 .avatar {

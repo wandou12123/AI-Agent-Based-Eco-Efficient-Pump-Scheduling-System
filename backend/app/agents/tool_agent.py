@@ -20,6 +20,7 @@ def _tool_schemas() -> str:
 2. get_station_units - 获取泵站机组，参数 {"station_id": int}
 3. create_schedule_task - 创建调度任务，参数 {"station_id": int, "objective_text": str, "min_flow": float}
 4. run_optimize - 触发优化，参数 {"task_id": int}
+5. create_and_optimize_schedule - 创建任务并立即优化（等价调度页「执行优化」），参数 {"station_id": int, "min_flow": float, "objective_text": str}
 
 若无需工具，直接回答用户。需要工具时先输出 <tool_call>{"name":"...", "arguments":{...}}</tool_call>，等待工具结果后再总结。
 """
